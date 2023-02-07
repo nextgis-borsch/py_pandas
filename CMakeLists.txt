@@ -118,6 +118,11 @@ if(NOT EXISTS ${CMAKE_CURRENT_BINARY_DIR}/${OUT_DIR_NAME})
     execute_process(COMMAND ${CMAKE_COMMAND} -E tar xzf ${CMAKE_CURRENT_BINARY_DIR}/${OUT_NAME})
 endif()
 
+include(FindAnyProject)
+find_anyproject(NUMPY REQUIRED)
+
+configure_file(${CMAKE_SOURCE_DIR}/cmake/setup.py.in ${CMAKE_CURRENT_BINARY_DIR}/${OUT_DIR_NAME}/setup.py IMMEDIATE @ONLY)
+
 macro(build_py)
     status_message("Configuring ...")
     execute_process(COMMAND ${CMAKE_COMMAND} -E env "${FLAGS}"
