@@ -60,7 +60,7 @@ get_compiler_version(COMPILER)
 # get version and download url
 execute_process(COMMAND ${PYTHON_EXECUTABLE}
     ${CMAKE_SOURCE_DIR}/cmake/pypi_process.py ${PLUGIN} ${CMAKE_CURRENT_BINARY_DIR}/meta.json ${COMPILER}
-    "2.2.3"
+    "2.0.3"
     OUTPUT_VARIABLE PACKAGE_DETAILS
     OUTPUT_STRIP_TRAILING_WHITESPACE
 )
@@ -100,8 +100,6 @@ else()
     set(FLAGS "NextGIS=TRUE")
 endif()
 
-set(BUILD_INCLUDES ${BUILD_INCLUDES} -q)
-
 # Download tarbal
 set(OUT_DIR_NAME ${PROJECT_NAME}-${VERSION})
 set(OUT_NAME "${OUT_DIR_NAME}.tar.gz")
@@ -118,78 +116,51 @@ if(NOT EXISTS ${CMAKE_CURRENT_BINARY_DIR}/${OUT_DIR_NAME})
     status_message("Extract ${CMAKE_CURRENT_BINARY_DIR}/${OUT_NAME}")
     execute_process(COMMAND ${CMAKE_COMMAND} -E tar xzf ${CMAKE_CURRENT_BINARY_DIR}/${OUT_NAME})
 endif()
+set(_UNPACK_CMAKE "${CMAKE_BINARY_DIR}/_unpack_wheel.cmake")
+file(WRITE "${_UNPACK_CMAKE}" [=[
+cmake_minimum_required(VERSION 3.20)
+if(NOT DEFINED DIST_DIR OR NOT DEFINED OUT_DIR)
+  message(FATAL_ERROR "Need -D DIST_DIR and -D OUT_DIR")
+endif()
 
-include(FindAnyProject)
-find_anyproject(NUMPY REQUIRED)
+file(GLOB wheels LIST_DIRECTORIES FALSE "${DIST_DIR}/*.whl")
+list(LENGTH wheels count)
+if(count EQUAL 0)
+  message(FATAL_ERROR "No .whl found in ${DIST_DIR}")
+elseif(count GREATER 1)
+  message(FATAL_ERROR "More than one .whl found in ${DIST_DIR} (this script expects exactly one)")
+endif()
 
-configure_file(${CMAKE_SOURCE_DIR}/cmake/setup.py.in ${CMAKE_CURRENT_BINARY_DIR}/${OUT_DIR_NAME}/setup.py IMMEDIATE @ONLY)
+set(wheel "${wheels}")
 
-macro(build_py)
-    status_message("Configuring ...")
-    execute_process(COMMAND ${CMAKE_COMMAND} -E env "${FLAGS}"
-        ${PYTHON_EXECUTABLE} setup.py build ${BUILD_INCLUDES}
-        WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/${OUT_DIR_NAME}
-        OUTPUT_QUIET ERROR_QUIET
-    )
+file(MAKE_DIRECTORY "${OUT_DIR}")
 
-    add_custom_target(build_py ALL
-        COMMAND ${CMAKE_COMMAND} -E env "${FLAGS}"
-        ${PYTHON_EXECUTABLE} setup.py build_ext ${BUILD_INCLUDES}
-        WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/${OUT_DIR_NAME}
-        VERBATIM
-    )
+execute_process(
+  COMMAND "${CMAKE_COMMAND}" -E tar xvf "${wheel}" --format=zip
+  WORKING_DIRECTORY "${OUT_DIR}"
+  RESULT_VARIABLE rv
+)
+if(NOT rv EQUAL 0)
+  message(FATAL_ERROR "Unpack failed (code ${rv}) for: ${wheel}")
+endif()
 
-    if(${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
-        set(SETUP_OPTS ${SETUP_OPTS} --no-compile --single-version-externally-managed --record=rekord.txt --prefix=${CMAKE_CURRENT_BINARY_DIR}/inst_tmp)
-    elseif(WIN32)
-        string(REPLACE "/" "\\\\" TMP_PATH "${CMAKE_CURRENT_BINARY_DIR}/inst_tmp")
-        set(SETUP_OPTS ${SETUP_OPTS} --no-compile --single-version-externally-managed --record=rekord.txt --prefix=${TMP_PATH})
-    else()
-        execute_process ( COMMAND ${PYTHON_EXECUTABLE} -c "from distutils.sysconfig import get_python_lib; print(get_python_lib())" OUTPUT_VARIABLE PY_SITE_PACKAGES OUTPUT_STRIP_TRAILING_WHITESPACE)
+message(STATUS "Unpacked: ${wheel} -> ${OUT_DIR}")
+]=])
 
-        set(TEST_CMD "try:
-    import setuptools
-    print(1)
-except ImportError:
-    pass")
+add_custom_target(build_wheel ALL
+    COMMAND "${PYTHON_EXECUTABLE}" -m pip install --upgrade build
+    COMMAND "${PYTHON_EXECUTABLE}" -m build --wheel --outdir ${CMAKE_CURRENT_BINARY_DIR}/out ${CMAKE_CURRENT_BINARY_DIR}/${OUT_DIR_NAME}
+    COMMAND "${CMAKE_COMMAND}"
+            -D DIST_DIR=${CMAKE_CURRENT_BINARY_DIR}/out/
+            -D OUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/unpack/
+            -P "${_UNPACK_CMAKE}"
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/${OUT_DIR_NAME}
+    VERBATIM
+)
 
-        execute_process ( COMMAND ${PYTHON_EXECUTABLE} -c ${TEST_CMD} OUTPUT_VARIABLE PY_HAVE_SETUPTOOLS OUTPUT_STRIP_TRAILING_WHITESPACE)
-        if(PY_HAVE_SETUPTOOLS)
-            set(SETUP_OPTS "${SETUP_OPTS} --no-compile --single-version-externally-managed --record=rekord.txt")
-        endif()
-
-        string( LENGTH "$ENV{DESTDIR}" DESTDIRLEN )
-        if ( ${DESTDIRLEN} GREATER 0 )
-            set(SETUP_OPTS "${SETUP_OPTS} --root=$ENV{DESTDIR}")
-        elseif(PYTHON_DESTDIR)
-            set(SETUP_OPTS "${SETUP_OPTS} --root=${PYTHON_DESTDIR}")
-        endif()
-
-        # check debian
-        string(FIND ${PY_SITE_PACKAGES} "dist-packages" PY_DIST_POS)
-        if(${PY_DIST_POS} GREATER -1)
-            set(SETUP_OPTS "${SETUP_OPTS} --install-layout=deb")
-        endif()
-
-        # TODO: do we need --install-lib=$(PYTHON_INSTALL_LIB) ?
-
-        set(SETUP_OPTS "${SETUP_OPTS} --prefix=${CMAKE_CURRENT_BINARY_DIR}/inst_tmp")
-
-    endif()
-    add_custom_target(install_py ALL
-        COMMAND ${CMAKE_COMMAND} -E env "${FLAGS}"
-        ${PYTHON_EXECUTABLE} setup.py install ${SETUP_OPTS}
-        DEPENDS build_py
-        WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/${OUT_DIR_NAME}
-        VERBATIM
-    )
-endmacro()
-
-
-build_py()
-
-if(NOT SKIP_INSTALL_LIBRARIES AND NOT SKIP_INSTALL_ALL )
-    install(DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/inst_tmp/ DESTINATION ${INSTALL_LIB_DIR})
+if(NOT SKIP_INSTALL_LIBRARIES AND NOT SKIP_INSTALL_ALL)
+    install(DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/unpack/pandas DESTINATION ${INSTALL_LIB_DIR})
+    install(DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/unpack/${OUT_DIR_NAME}.dist-info DESTINATION ${INSTALL_LIB_DIR})
 endif()
 
 # Archiving ====================================================================

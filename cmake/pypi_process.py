@@ -14,7 +14,7 @@ def get_latest_version(data):
                 return version, file['url'], file['upload_time'].replace('T', ' ')
     return None, None, None
 
-with open(sys.argv[1]) as data_file:
+with open(sys.argv[1], 'r', encoding='utf-8') as data_file:
     data = json.load(data_file)
     name = data['info']['name']
     version_max = sys.argv[3] if len(sys.argv) > 3 else None
